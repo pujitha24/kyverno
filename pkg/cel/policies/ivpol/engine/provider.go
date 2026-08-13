@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	policieskyvernoio "github.com/kyverno/api/api/policies.kyverno.io"
 	policiesv1beta1 "github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
 	"github.com/kyverno/kyverno/pkg/cel/engine"
 	ivpolautogen "github.com/kyverno/kyverno/pkg/cel/policies/ivpol/autogen"
@@ -61,6 +62,19 @@ func NewProvider(policies []policiesv1beta1.ImageValidatingPolicyLike, exception
 	return provider, nil
 }
 
+// policyExceptionRequestKey builds the reconcile key for the policy a PolicyException
+// refers to. NamespacedImageValidatingPolicy is namespace-scoped, so the request must
+// carry the exception's own namespace, otherwise Reconcile treats it as a cluster-scoped
+// ImageValidatingPolicy lookup and the namespaced policy is never re-evaluated for the
+// exception change.
+func policyExceptionRequestKey(ref policiesv1beta1.PolicyRef, polexNamespace string) client.ObjectKey {
+	key := client.ObjectKey{Name: ref.Name}
+	if ref.Kind == policieskyvernoio.NamespacedImageValidatingPolicyKind {
+		key.Namespace = polexNamespace
+	}
+	return key
+}
+
 func NewKubeProvider(
 	mgr ctrl.Manager,
 	polexLister engine.PolicyExceptionLister,
@@ -82,11 +96,7 @@ func NewKubeProvider(
 			) {
 				polex := tce.Object.(*policiesv1beta1.PolicyException)
 				for _, ref := range polex.Spec.PolicyRefs {
-					trli.Add(reconcile.Request{
-						NamespacedName: client.ObjectKey{
-							Name: ref.Name,
-						},
-					})
+					trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, polex.GetNamespace())})
 				}
 			},
 			UpdateFunc: func(
@@ -96,11 +106,7 @@ func NewKubeProvider(
 			) {
 				polex := tue.ObjectNew.(*policiesv1beta1.PolicyException)
 				for _, ref := range polex.Spec.PolicyRefs {
-					trli.Add(reconcile.Request{
-						NamespacedName: client.ObjectKey{
-							Name: ref.Name,
-						},
-					})
+					trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, polex.GetNamespace())})
 				}
 			},
 			DeleteFunc: func(
@@ -110,11 +116,7 @@ func NewKubeProvider(
 			) {
 				polex := tde.Object.(*policiesv1beta1.PolicyException)
 				for _, ref := range polex.Spec.PolicyRefs {
-					trli.Add(reconcile.Request{
-						NamespacedName: client.ObjectKey{
-							Name: ref.Name,
-						},
-					})
+					trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, polex.GetNamespace())})
 				}
 			},
 		}

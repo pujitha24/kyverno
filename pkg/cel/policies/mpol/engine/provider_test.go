@@ -164,3 +164,17 @@ func TestStaticProviderMatchesMutateExisting(t *testing.T) {
 		assert.Equal(t, []string{"match"}, names)
 	})
 }
+
+func TestPolicyExceptionRequestKey(t *testing.T) {
+	t.Run("cluster-scoped MutatingPolicy reference gets no namespace", func(t *testing.T) {
+		key := policyExceptionRequestKey(policiesv1beta1.PolicyRef{Name: "cpol", Kind: "MutatingPolicy"}, "test-ns")
+		assert.Equal(t, "cpol", key.Name)
+		assert.Equal(t, "", key.Namespace)
+	})
+
+	t.Run("NamespacedMutatingPolicy reference is scoped to the exception's namespace", func(t *testing.T) {
+		key := policyExceptionRequestKey(policiesv1beta1.PolicyRef{Name: "npol", Kind: "NamespacedMutatingPolicy"}, "test-ns")
+		assert.Equal(t, "npol", key.Name)
+		assert.Equal(t, "test-ns", key.Namespace)
+	})
+}

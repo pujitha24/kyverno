@@ -75,6 +75,19 @@ func NewProvider(
 	}, nil
 }
 
+// policyExceptionRequestKey builds the reconcile key for the policy a PolicyException
+// refers to. NamespacedValidatingPolicy is namespace-scoped, so the request must carry
+// the exception's own namespace, otherwise Reconcile treats it as a cluster-scoped
+// ValidatingPolicy lookup and the namespaced policy is never re-evaluated for the
+// exception change.
+func policyExceptionRequestKey(ref policiesv1beta1.PolicyRef, polexNamespace string) client.ObjectKey {
+	key := client.ObjectKey{Name: ref.Name}
+	if ref.Kind == policieskyvernoio.NamespacedValidatingPolicyKind {
+		key.Namespace = polexNamespace
+	}
+	return key
+}
+
 func NewKubeProvider(
 	compiler vpolcompiler.Compiler,
 	mgr ctrl.Manager,
@@ -99,11 +112,7 @@ func NewKubeProvider(
 				for _, ref := range polex.Spec.PolicyRefs {
 					applies := ref.Kind == policieskyvernoio.ValidatingPolicyKind || ref.Kind == policieskyvernoio.NamespacedValidatingPolicyKind
 					if applies {
-						trli.Add(reconcile.Request{
-							NamespacedName: client.ObjectKey{
-								Name: ref.Name,
-							},
-						})
+						trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, polex.GetNamespace())})
 					}
 				}
 			},
@@ -112,22 +121,14 @@ func NewKubeProvider(
 				for _, ref := range newPolex.Spec.PolicyRefs {
 					applies := ref.Kind == policieskyvernoio.ValidatingPolicyKind || ref.Kind == policieskyvernoio.NamespacedValidatingPolicyKind
 					if applies {
-						trli.Add(reconcile.Request{
-							NamespacedName: client.ObjectKey{
-								Name: ref.Name,
-							},
-						})
+						trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, newPolex.GetNamespace())})
 					}
 				}
 				oldPolex := tue.ObjectOld.(*policiesv1beta1.PolicyException)
 				for _, ref := range oldPolex.Spec.PolicyRefs {
 					applies := ref.Kind == policieskyvernoio.ValidatingPolicyKind || ref.Kind == policieskyvernoio.NamespacedValidatingPolicyKind
 					if applies {
-						trli.Add(reconcile.Request{
-							NamespacedName: client.ObjectKey{
-								Name: ref.Name,
-							},
-						})
+						trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, oldPolex.GetNamespace())})
 					}
 				}
 			},
@@ -136,11 +137,7 @@ func NewKubeProvider(
 				for _, ref := range polex.Spec.PolicyRefs {
 					applies := ref.Kind == policieskyvernoio.ValidatingPolicyKind || ref.Kind == policieskyvernoio.NamespacedValidatingPolicyKind
 					if applies {
-						trli.Add(reconcile.Request{
-							NamespacedName: client.ObjectKey{
-								Name: ref.Name,
-							},
-						})
+						trli.Add(reconcile.Request{NamespacedName: policyExceptionRequestKey(ref, polex.GetNamespace())})
 					}
 				}
 			},
