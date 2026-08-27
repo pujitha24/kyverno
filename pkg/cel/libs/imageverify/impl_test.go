@@ -3,6 +3,7 @@ package imageverify
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -13,6 +14,7 @@ import (
 	"github.com/kyverno/kyverno/pkg/image/verifiers/ivpol/cosign"
 	"github.com/kyverno/kyverno/pkg/image/verifiers/ivpol/notary"
 	"github.com/kyverno/sdk/extensions/imagedataloader"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -245,6 +247,31 @@ func Test_impl_verify_image_signature_cache_miss_does_not_cache_failure(t *testi
 	found, err := ivCache.Get(context.TODO(), pol, cacheRule, image, true)
 	assert.NoError(t, err)
 	assert.False(t, found, "a partial or failed verification must never be cached")
+}
+
+// Demonstrates that isTransientVerificationError only classifies a request
+// cancellation/timeout as transient, and not an actual signature mismatch --
+// this is what lets verify_image_signature_string_stringarray surface the
+// real cause (e.g. "context canceled" from a slow registry) instead of a bare
+// 0 that reads identically to a genuinely invalid signature.
+func Test_isTransientVerificationError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"context canceled", context.Canceled, true},
+		{"context deadline exceeded", context.DeadlineExceeded, true},
+		{"wrapped context canceled", fmt.Errorf("failed to verify cosign signatures: %w", context.Canceled), true},
+		{"pkg/errors wrapped context canceled", errors.Wrap(context.Canceled, "failed to verify cosign signatures"), true},
+		{"invalid signature", fmt.Errorf("transparency log or timestamp verification failed"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isTransientVerificationError(tt.err))
+		})
+	}
 }
 
 // Demonstrates that a verifyAttestationSignatures cache hit restores Cosign

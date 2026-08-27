@@ -3,6 +3,7 @@ package imageverify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -137,6 +138,13 @@ func pendingKey(image, attestation string) string {
 	return image + "\x00" + attestation
 }
 
+// isTransientVerificationError reports whether err stems from the request
+// being cancelled or timing out (e.g. a slow registry) rather than from an
+// actual signature/attestation mismatch.
+func isTransientVerificationError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func (f *ivfuncs) verify_image_signature_string_stringarray(image ref.Val, attestors ref.Val) ref.Val {
 	ctx := context.TODO()
 	if image, err := utils.ConvertToNative[string](image); err != nil {
@@ -172,11 +180,15 @@ func (f *ivfuncs) verify_image_signature_string_stringarray(image ref.Val, attes
 			return types.NewErr("failed to get imagedata: %v", err)
 		}
 
+		var transientErr error
 		for _, attestor := range attestors {
 			if attestor.IsCosign() {
 				f.logger.V(4).Info("verifying image signature", "image", image, "attestor", attestor.Name, "type", "cosign")
 				if err := f.cosignVerifier.VerifyImageSignature(ctx, img, &attestor); err != nil {
 					f.logger.V(6).Info("image signature verification failed", "image", image, "attestor", attestor.Name, "type", "cosign", "error", err)
+					if isTransientVerificationError(err) {
+						transientErr = err
+					}
 				} else {
 					f.logger.V(4).Info("image signature verified", "image", image, "attestor", attestor.Name, "type", "cosign")
 					count += 1
@@ -192,6 +204,9 @@ func (f *ivfuncs) verify_image_signature_string_stringarray(image ref.Val, attes
 				f.logger.V(4).Info("verifying image signature", "image", image, "attestor", attestor.Name, "type", "notary")
 				if err := f.notaryVerifier.VerifyImageSignature(ctx, img, certs, tsaCerts); err != nil {
 					f.logger.V(6).Info("image signature verification failed", "image", image, "attestor", attestor.Name, "type", "notary", "error", err)
+					if isTransientVerificationError(err) {
+						transientErr = err
+					}
 				} else {
 					f.logger.V(4).Info("image signature verified", "image", image, "attestor", attestor.Name, "type", "notary")
 					count += 1
@@ -199,6 +214,14 @@ func (f *ivfuncs) verify_image_signature_string_stringarray(image ref.Val, attes
 			}
 		}
 		f.logger.V(6).Info("verifyImageSignatures returning", "image", image, "verifiedCount", count)
+		// Every attestor failed and at least one failure was due to the
+		// request being cancelled/timing out: surface the real cause instead
+		// of a bare 0, which is indistinguishable from an actual invalid
+		// signature and gets reported with the policy's static failure
+		// message either way.
+		if count == 0 && transientErr != nil {
+			return types.NewErr("image signature verification failed: %v", transientErr)
+		}
 		if f.ivCache != nil && len(attestors) > 0 && count == len(attestors) {
 			if _, err := f.ivCache.Set(ctx, f.policy, cacheRule, image, true); err != nil {
 				f.logger.Error(err, "error occurred during image verify cache set", "image", image)
@@ -268,11 +291,15 @@ func (f *ivfuncs) verify_image_attestations_string_string_stringarray(args ...re
 			return types.NewErr("failed to get imagedata: %v", err)
 		}
 
+		var transientErr error
 		for _, attestor := range attestors {
 			if attestor.IsCosign() {
 				f.logger.V(4).Info("verifying attestation signature", "image", image, "attestation", attestation, "attestor", attestor.Name, "type", "cosign")
 				if err := f.cosignVerifier.VerifyAttestationSignature(ctx, img, &attest, &attestor); err != nil {
 					f.logger.V(6).Info("attestation signature verification failed", "image", image, "attestation", attestation, "attestor", attestor.Name, "type", "cosign", "error", err)
+					if isTransientVerificationError(err) {
+						transientErr = err
+					}
 				} else {
 					f.logger.V(4).Info("attestation signature verified", "image", image, "attestation", attestation, "attestor", attestor.Name, "type", "cosign")
 					count += 1
@@ -291,6 +318,9 @@ func (f *ivfuncs) verify_image_attestations_string_string_stringarray(args ...re
 				f.logger.V(4).Info("verifying attestation signature", "image", image, "attestation", attestation, "attestor", attestor.Name, "type", "notary")
 				if err := f.notaryVerifier.VerifyAttestationSignature(ctx, img, attest.Referrer.Type, certs, tsaCerts); err != nil {
 					f.logger.V(6).Info("attestation signature verification failed", "image", image, "attestation", attestation, "attestor", attestor.Name, "type", "notary", "error", err)
+					if isTransientVerificationError(err) {
+						transientErr = err
+					}
 				} else {
 					f.logger.V(4).Info("attestation signature verified", "image", image, "attestation", attestation, "attestor", attestor.Name, "type", "notary")
 					count += 1
@@ -298,6 +328,14 @@ func (f *ivfuncs) verify_image_attestations_string_string_stringarray(args ...re
 			}
 		}
 		f.logger.V(6).Info("verifyAttestationSignatures returning", "image", image, "attestation", attestation, "verifiedCount", count)
+		// Every attestor failed and at least one failure was due to the
+		// request being cancelled/timing out: surface the real cause instead
+		// of a bare 0, which is indistinguishable from an actual invalid
+		// attestation and gets reported with the policy's static failure
+		// message either way.
+		if count == 0 && transientErr != nil {
+			return types.NewErr("image attestation verification failed: %v", transientErr)
+		}
 		if f.ivCache != nil && len(attestors) > 0 && count == len(attestors) {
 			// The write stays eager: img is already in memory (fetched
 			// above for verification), so extracting the payload here costs
