@@ -2,6 +2,7 @@ package patch
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -261,4 +262,26 @@ func Test_PolicyDeserilize(t *testing.T) {
 	if !assertnew.Equal(t, string(eb), string(out)) {
 		t.FailNow()
 	}
+}
+
+func TestStrategicMergePatchControlCharacters(t *testing.T) {
+	t.Parallel()
+	resource := []byte(`{"apiVersion":"v1","kind":"Pod","metadata":{"name":"repro"},"spec":{"containers":[{"name":"c","image":"pause","env":[{"name":"X","value":"` + "\x7f" + `"}]}]}}`)
+	overlay := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"labels": map[string]interface{}{"foo": "bar"},
+		},
+	}
+	assert.NilError(t, func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("unexpected panic: %v", r)
+			}
+		}()
+		_, err = ProcessStrategicMergePatch(logr.Discard(), overlay, resource)
+		if err == nil {
+			return fmt.Errorf("expected an error")
+		}
+		return nil
+	}())
 }

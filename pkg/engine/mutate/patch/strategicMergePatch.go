@@ -54,10 +54,16 @@ func strategicMergePatch(logger logr.Logger, base, overlay string) ([]byte, erro
 }
 
 func preProcessStrategicMergePatch(logger logr.Logger, pattern, resource string) (*yaml.RNode, error) {
-	patternNode := yaml.MustParse(pattern)
-	resourceNode := yaml.MustParse(resource)
+	patternNode, err := yaml.Parse(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse patch: %w", err)
+	}
+	resourceNode, err := yaml.Parse(resource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse resource: %w", err)
+	}
 
-	err := PreProcessPattern(logger, patternNode, resourceNode)
+	err = PreProcessPattern(logger, patternNode, resourceNode)
 
 	return patternNode, err
 }
