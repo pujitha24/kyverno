@@ -1094,3 +1094,65 @@ func TestApplyAdditionalExtensions_Aliases(t *testing.T) {
 		}
 	})
 }
+
+// TestCheckOptions_KeylessInlineTrustedRoot_SkipsTUF verifies that a keyless
+// attestor with an inline trustedRoot and the tlog/SCT checks ignored does not
+// initialize the public TUF client, and takes Fulcio roots from the inline root.
+func TestCheckOptions_KeylessInlineTrustedRoot_SkipsTUF(t *testing.T) {
+	validJSON, err := os.ReadFile("testdata/github-trusted-root.json")
+	require.NoError(t, err)
+
+	origTufInit := tufInitializeFn
+	t.Cleanup(func() { tufInitializeFn = origTufInit })
+	tufCalled := false
+	tufInitializeFn = func(_ context.Context, _ string, _ []byte) error {
+		tufCalled = true
+		return fmt.Errorf("TUF must not be initialized")
+	}
+
+	newAtt := func() *v1beta1.Cosign {
+		return &v1beta1.Cosign{
+			Keyless: &v1beta1.Keyless{
+				Identities: []v1beta1.Identity{{Issuer: testIssuer, Subject: testSubject}},
+			},
+			CTLog:       &v1beta1.CTLog{InsecureIgnoreTlog: true, InsecureIgnoreSCT: true},
+			TrustedRoot: &v1beta1.StringOrExpression{Value: string(validJSON)},
+		}
+	}
+	rOpts, nOpts := baseOpts()
+
+	opts, err := checkOptions(context.TODO(), newAtt(), rOpts, nOpts, nil)
+	require.NoError(t, err)
+	assert.False(t, tufCalled)
+	assert.NotNil(t, opts.TrustedMaterial)
+	assert.NotNil(t, opts.RootCerts)
+	assert.NotNil(t, opts.IntermediateCerts)
+	assert.True(t, opts.IgnoreTlog)
+	assert.True(t, opts.IgnoreSCT)
+	assert.Len(t, opts.Identities, 1)
+
+	t.Run("explicit TUF configuration still initializes TUF", func(t *testing.T) {
+		att := newAtt()
+		att.TUF = &v1beta1.TUF{Mirror: "https://tuf.example.com"}
+		_, err := checkOptions(context.TODO(), att, rOpts, nOpts, nil)
+		require.Error(t, err)
+		assert.True(t, tufCalled)
+	})
+	t.Run("SCT not ignored still initializes TUF", func(t *testing.T) {
+		tufCalled = false
+		att := newAtt()
+		att.CTLog.InsecureIgnoreSCT = false
+		_, err := checkOptions(context.TODO(), att, rOpts, nOpts, nil)
+		require.Error(t, err)
+		assert.True(t, tufCalled)
+	})
+
+	t.Run("no inline trustedRoot still initializes TUF", func(t *testing.T) {
+		tufCalled = false
+		att := newAtt()
+		att.TrustedRoot = nil
+		_, err := checkOptions(context.TODO(), att, rOpts, nOpts, nil)
+		require.Error(t, err)
+		assert.True(t, tufCalled)
+	})
+}

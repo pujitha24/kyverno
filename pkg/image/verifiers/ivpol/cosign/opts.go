@@ -88,6 +88,13 @@ func checkOptions(ctx context.Context, att *v1beta1.Cosign, baseROpts []remote.O
 	ignoreTlog := att.CTLog != nil && att.CTLog.InsecureIgnoreTlog
 	keyOrCert := att.Keyless == nil && (att.Key != nil || att.Certificate != nil)
 	skipSigstoreInfra := keyOrCert && ignoreTlog
+	// A keyless attestor with an inline trustedRoot, no explicit TUF
+	// configuration and both the tlog and SCT checks ignored carries all of its
+	// trust material in the inline root, so the public TUF repository is not
+	// needed (it is required to be reachable otherwise, breaking air-gapped use).
+	inlineKeyless := att.Keyless != nil && att.TUF == nil &&
+		att.TrustedRoot != nil && att.TrustedRoot.Value != "" &&
+		ignoreTlog && att.CTLog.InsecureIgnoreSCT
 	cosignRemoteOpts := []ociremote.Option{}
 
 	if att.Source != nil {
@@ -116,7 +123,22 @@ func checkOptions(ctx context.Context, att *v1beta1.Cosign, baseROpts []remote.O
 		RegistryClientOpts: cosignRemoteOpts,
 	}
 
-	if !skipSigstoreInfra {
+	if inlineKeyless {
+		tr, err := parseInlineTrustedRoot(att.TrustedRoot.Value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve trusted material: %w", err)
+		}
+		fulcioRoots, fulcioIntermediates, err := fulcioRootsFromTrustedRoot(tr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load Fulcio material from inline trustedRoot: %w", err)
+		}
+		trust = &sigstoreTrustMaterial{
+			trustedRoot:         tr,
+			fulcioRoots:         fulcioRoots,
+			fulcioIntermediates: fulcioIntermediates,
+		}
+		opts.TrustedMaterial = tr
+	} else if !skipSigstoreInfra {
 		// initTUFAndFetch initializes the TUF singleton and reads all
 		// TUF-derived trust material (Rekor/CTLog pubkeys, trusted root,
 		// Fulcio roots) in a single mutex acquisition, so no concurrent
@@ -202,7 +224,8 @@ func checkOptions(ctx context.Context, att *v1beta1.Cosign, baseROpts []remote.O
 			return nil, err
 		}
 		// trust is always non-nil when att.Keyless != nil because
-		// skipSigstoreInfra requires keyOrCert=true (att.Keyless==nil).
+		// skipSigstoreInfra requires keyOrCert=true (att.Keyless==nil) and
+		// inlineKeyless populates it directly.
 		opts.RootCerts = trust.fulcioRoots
 		opts.IntermediateCerts = trust.fulcioIntermediates
 		if att.Keyless.Roots != "" {
@@ -687,14 +710,24 @@ func logKeyStatus(start, end time.Time) tuf.StatusKind {
 // to the TUF-derived trusted root for standard Sigstore verification.
 func resolveTrustedMaterial(att *v1beta1.Cosign, defaultTrustedRoot *root.TrustedRoot) (root.TrustedMaterial, error) {
 	if att.TrustedRoot != nil && att.TrustedRoot.Value != "" {
-		if n := len(att.TrustedRoot.Value); n > maxTrustedRootJSONSize {
-			return nil, fmt.Errorf("inline trustedRoot JSON is too large (%d bytes), maximum allowed is %d bytes", n, maxTrustedRootJSONSize)
-		}
-		tr, err := root.NewTrustedRootFromJSON([]byte(att.TrustedRoot.Value))
+		tr, err := parseInlineTrustedRoot(att.TrustedRoot.Value)
 		if err != nil {
-			return nil, fmt.Errorf("parsing inline trustedRoot JSON: %w", err)
+			return nil, err
 		}
 		return tr, nil
 	}
 	return defaultTrustedRoot, nil
+}
+
+// parseInlineTrustedRoot parses an inline trustedRoot JSON value, enforcing
+// maxTrustedRootJSONSize.
+func parseInlineTrustedRoot(value string) (*root.TrustedRoot, error) {
+	if n := len(value); n > maxTrustedRootJSONSize {
+		return nil, fmt.Errorf("inline trustedRoot JSON is too large (%d bytes), maximum allowed is %d bytes", n, maxTrustedRootJSONSize)
+	}
+	tr, err := root.NewTrustedRootFromJSON([]byte(value))
+	if err != nil {
+		return nil, fmt.Errorf("parsing inline trustedRoot JSON: %w", err)
+	}
+	return tr, nil
 }
