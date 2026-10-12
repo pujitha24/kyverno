@@ -323,3 +323,31 @@ func TestBuildMutatingAdmissionPolicyBeta_MutationTypeConversion(t *testing.T) {
 	assert.NotNil(t, mapol2.Spec.Mutations[0].JSONPatch)
 	assert.Equal(t, "[{'op': 'add', 'path': '/metadata/labels/app', 'value': 'test'}]", mapol2.Spec.Mutations[0].JSONPatch.Expression)
 }
+
+func TestNegateExceptionMatchConditions(t *testing.T) {
+	t.Parallel()
+	exceptions := []policiesv1beta1.PolicyException{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "multi"},
+			Spec: policiesv1beta1.PolicyExceptionSpec{
+				MatchConditions: []admissionregistrationv1.MatchCondition{
+					{Name: "a", Expression: "x == 1"},
+					{Name: "b", Expression: "y == 2"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "single"},
+			Spec: policiesv1beta1.PolicyExceptionSpec{
+				MatchConditions: []admissionregistrationv1.MatchCondition{
+					{Name: "c", Expression: "z == 3"},
+				},
+			},
+		},
+	}
+	got := negateExceptionMatchConditions(exceptions)
+	assert.Equal(t, []admissionregistrationv1.MatchCondition{
+		{Name: exceptionConditionName("", "multi"), Expression: "!((x == 1) && (y == 2))"},
+		{Name: "c", Expression: "!(z == 3)"},
+	}, got)
+}

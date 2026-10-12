@@ -1,6 +1,8 @@
 package admissionpolicy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -251,15 +253,37 @@ func mutatingPolicyOwnerRef(mp *policiesv1beta1.MutatingPolicy) []metav1.OwnerRe
 	}
 }
 
-// negateExceptionMatchConditions returns negated match conditions for each exception,
+// exceptionConditionName returns a short, valid and stable match condition name for an exception,
+// as exception names may exceed the 63 character limit and may collide across namespaces.
+func exceptionConditionName(namespace, name string) string {
+	sum := sha256.Sum256([]byte(namespace + "/" + name))
+	return "exception-" + hex.EncodeToString(sum[:4])
+}
+
+// negateExceptionMatchConditions returns one negated match condition per exception,
 // using the v1 MatchCondition type which is structurally identical to the alpha/beta variants.
+// An exception applies only when all of its match conditions are true, so they are negated as a
+// whole: !(c1 && c2). Negating each separately would be ANDed by the API server into !c1 && !c2,
+// excluding resources that match any single condition.
 func negateExceptionMatchConditions(exceptions []policiesv1beta1.PolicyException) []admissionregistrationv1.MatchCondition {
 	var result []admissionregistrationv1.MatchCondition
 	for _, exception := range exceptions {
-		for _, mc := range exception.Spec.MatchConditions {
+		conditions := exception.Spec.MatchConditions
+		switch len(conditions) {
+		case 0:
+		case 1:
 			result = append(result, admissionregistrationv1.MatchCondition{
-				Name:       mc.Name,
-				Expression: "!(" + mc.Expression + ")",
+				Name:       conditions[0].Name,
+				Expression: "!(" + conditions[0].Expression + ")",
+			})
+		default:
+			exprs := make([]string, 0, len(conditions))
+			for _, mc := range conditions {
+				exprs = append(exprs, "("+mc.Expression+")")
+			}
+			result = append(result, admissionregistrationv1.MatchCondition{
+				Name:       exceptionConditionName(exception.Namespace, exception.Name),
+				Expression: "!(" + strings.Join(exprs, " && ") + ")",
 			})
 		}
 	}
