@@ -34,6 +34,16 @@ func Test_parse(t *testing.T) {
 			"foo": "something",
 		},
 	}, {
+		name: "value containing =",
+		vars: []string{
+			"url=https://example.com/api?a=1&b=2",
+			"token=aGVsbG8=",
+		},
+		want: map[string]string{
+			"url":   "https://example.com/api?a=1&b=2",
+			"token": "aGVsbG8=",
+		},
+	}, {
 		name: "invalid",
 		vars: []string{
 			"foo",

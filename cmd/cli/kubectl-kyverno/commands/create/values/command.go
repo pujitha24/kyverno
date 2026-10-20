@@ -91,11 +91,11 @@ func parseNamespaceSelector(in string) *v1alpha1.NamespaceSelector {
 }
 
 func parseKeyValue(in string) (string, string) {
-	parts := strings.Split(in, "=")
-	if len(parts) == 2 {
-		return parts[0], parts[1]
+	k, v, found := strings.Cut(in, "=")
+	if !found {
+		return "", ""
 	}
-	return "", ""
+	return k, v
 }
 
 func parseRule(in string) *v1alpha1.Policy {
