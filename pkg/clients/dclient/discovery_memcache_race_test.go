@@ -282,3 +282,16 @@ func TestFindResources_InvalidationFindsNewResource(t *testing.T) {
 	assert.EqualValues(t, 1, fake.calls.Load()-filled, "a stale cache must refresh immediately")
 	assert.Equal(t, lastRefetch, d.lastRefetch, "a cache refresh must not need a forced miss refetch")
 }
+
+// TestDiscoveryMiss_BareKindDoesNotRefetch: a bare non-core kind never matches
+// the core-only RESTMapper lookup, so resolving it must not drop a fresh cache.
+func TestDiscoveryMiss_BareKindDoesNotRefetch(t *testing.T) {
+	disco, fake := newStaleCacheDiscovery(t, 0)
+	filled := fake.calls.Load()
+
+	gvr, err := disco.GetGVRFromGVK(schema.GroupVersionKind{Kind: "CiliumNetworkPolicy"})
+
+	require.NoError(t, err)
+	assert.Equal(t, schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}, gvr)
+	assert.Equal(t, filled, fake.calls.Load(), "a bare kind resolved from the cache must not refetch discovery")
+}

@@ -229,11 +229,16 @@ func (c *serverResources) GetGVRFromGVK(gvk schema.GroupVersionKind) (schema.Gro
 		if err == nil {
 			return mapping.Resource, nil
 		}
-		if err = c.refetchOnMiss(func() error {
-			mapping, err = c.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-			return err
-		}); err == nil {
-			return mapping.Resource, nil
+		// A bare kind only matches the core group in the mapper, so a miss
+		// says nothing about the cache; FindResource below resolves it and
+		// refetches only if it misses too.
+		if gvk.Group != "" || gvk.Version != "" {
+			if err = c.refetchOnMiss(func() error {
+				mapping, err = c.mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+				return err
+			}); err == nil {
+				return mapping.Resource, nil
+			}
 		}
 	}
 	_, _, gvr, err := c.FindResource(gvk.GroupVersion().String(), gvk.Kind)
