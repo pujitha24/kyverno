@@ -3,6 +3,7 @@ package webhook
 import (
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -43,11 +44,13 @@ func (c *expressionCache) GetOrCompile(condition admissionregistrationv1.MatchCo
 	}
 	c.mu.RUnlock()
 
+	// compile against a snapshot: the compiler reads the map and AddExpression writes it concurrently
 	c.mu.RLock()
 	isPreexisting := c.preexistingExpressions[condition.Expression]
+	preexisting := maps.Clone(c.preexistingExpressions)
 	c.mu.RUnlock()
 
-	errors := compiler.CompileMatchConditionsWithKubernetesEnv([]admissionregistrationv1.MatchCondition{condition}, c.preexistingExpressions)
+	errors := compiler.CompileMatchConditionsWithKubernetesEnv([]admissionregistrationv1.MatchCondition{condition}, preexisting)
 
 	compiled := &compiledExpression{
 		expression: condition.Expression,
