@@ -1184,6 +1184,14 @@ func TestFindAndShiftReferences_AnyPatternPositiveCase(t *testing.T) {
 	assert.Equal(t, expectedMessage, actualMessage)
 }
 
+func TestFindAndShiftReferences_AnyPatternMultipleReferences(t *testing.T) {
+	message := "Compare $(./../../anyPattern/0/spec/containers/0/image) with $(./../../anyPattern/1/spec/containers/0/image)."
+	expectedMessage := "Compare $(./../../anyPattern/0/spec/jobTemplate/spec/containers/0/image) with $(./../../anyPattern/1/spec/jobTemplate/spec/containers/0/image)."
+	actualMessage := FindAndShiftReferences(logr.Discard(), message, "spec/jobTemplate", "anyPattern")
+
+	assert.Equal(t, expectedMessage, actualMessage)
+}
+
 func Test_EscpReferenceSubstitution(t *testing.T) {
 	jsonRaw := []byte(`
 	{
