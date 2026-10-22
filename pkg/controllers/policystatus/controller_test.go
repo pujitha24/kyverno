@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	policiesv1beta1 "github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
@@ -23,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // emptyMatchResources is a convenience for constructing policy specs with no resource rules.
@@ -544,5 +546,28 @@ func TestReconcileBeta1Conditions_RBACChecksAutogenTargets(t *testing.T) {
 				assert.Contains(t, cond.Message, "extraResources", "RBACPermissionsGranted message should point at the RBAC grant mechanism")
 			}
 		})
+	}
+}
+
+func TestWatchdog_ReturnsOnContextCancel(t *testing.T) {
+	t.Parallel()
+	notify := make(chan string, 1)
+	c := &controller{
+		queue:            workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[any]()),
+		polStateRecorder: webhook.NewStateRecorder(notify),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.watchdog(ctx, logr.Discard())
+	}()
+	notify <- "key"
+	require.Eventually(t, func() bool { return c.queue.Len() == 1 }, 5*time.Second, 10*time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watchdog did not return after context cancellation")
 	}
 }

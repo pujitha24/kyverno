@@ -216,8 +216,17 @@ func (c controller) Run(ctx context.Context, workers int) {
 }
 
 func (c *controller) watchdog(ctx context.Context, logger logr.Logger) {
-	for key := range c.polStateRecorder.NotifyChannel() {
-		c.queue.Add(key)
+	notify := c.polStateRecorder.NotifyChannel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case key, ok := <-notify:
+			if !ok {
+				return
+			}
+			c.queue.Add(key)
+		}
 	}
 }
 
