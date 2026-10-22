@@ -867,6 +867,23 @@ func Test_SemverCompare(t *testing.T) {
 	}
 }
 
+func Test_SemverCompare_InvalidVersion(t *testing.T) {
+	testCases := []string{
+		"semver_compare('invalid-version','>=0.0.0')",
+		"semver_compare('invalid-version','==0.0.0')",
+		"semver_compare('1.2','>=1.0.0')",
+	}
+	for _, jmesPath := range testCases {
+		t.Run(jmesPath, func(t *testing.T) {
+			jp, err := jmespathInterface.Query(jmesPath)
+			assert.NilError(t, err)
+
+			_, err = jp.Search("")
+			assert.ErrorContains(t, err, "Major.Minor.Patch elements found")
+		})
+	}
+}
+
 func Test_Lookup(t *testing.T) {
 	testCases := []struct {
 		collection     string
