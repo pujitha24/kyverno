@@ -228,11 +228,12 @@ func GetResourceGVR(report metav1.Object) schema.GroupVersionResource {
 	group := controllerutils.GetLabel(report, LabelResourceGroup)
 	version := controllerutils.GetLabel(report, LabelResourceVersion)
 	resource := controllerutils.GetLabel(report, AnnotationResourceName)
-	GVRstring := group + version + resource
 
-	// If all three parts exist, return the GVR
+	// If all three parts exist, return the GVR. The length is computed the same
+	// way as in SetResourceGVR (dotted form), otherwise 64 and 65 character
+	// values are written in split format but never read back.
 	if group != "" && version != "" && resource != "" {
-		if len(GVRstring) > 63 {
+		if len(resource+"."+version+"."+group) > 63 {
 			return schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
 		}
 	}

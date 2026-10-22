@@ -63,6 +63,22 @@ func TestSetResourceGVR_GetResourceGVR_RoundTrip_LongGVR(t *testing.T) {
 	assert.Equal(t, gvr.Resource, result.Resource, "Resource should match for long GVR")
 }
 
+func TestSetResourceGVR_GetResourceGVR_RoundTrip_BoundaryLengths(t *testing.T) {
+	// dotted lengths of 64 and 65 are stored in split format; their undotted length is <= 63
+	for _, resource := range []string{"openstackmachinecreators", "openstackmachinetemplates"} {
+		gvr := schema.GroupVersionResource{
+			Group:    "infrastructure.cluster.x-k8s.io",
+			Version:  "v1beta1",
+			Resource: resource,
+		}
+		report := &reportsv1.EphemeralReport{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-report", Labels: make(map[string]string)},
+		}
+		SetResourceGVR(report, gvr)
+		assert.Equal(t, gvr, GetResourceGVR(report), resource)
+	}
+}
+
 func TestSetResourceGVR_GetResourceGVR_CoreAPI_EmptyGroup(t *testing.T) {
 	// Test with empty group (core API resources like pods, configmaps)
 	report := &reportsv1.EphemeralReport{
