@@ -11,6 +11,7 @@ import (
 
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
 	"github.com/go-git/go-billy/v5"
+	policieskyvernoio "github.com/kyverno/api/api/policies.kyverno.io"
 	policiesv1beta1 "github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
 	authzhttp "github.com/kyverno/kyverno-authz/pkg/cel/libs/authz/http"
 	kyvernov2 "github.com/kyverno/kyverno/api/kyverno/v2"
@@ -34,10 +35,15 @@ import (
 	"github.com/kyverno/kyverno/ext/cluster"
 	"github.com/kyverno/kyverno/ext/output/pluralize"
 	celengine "github.com/kyverno/kyverno/pkg/cel/engine"
+	"github.com/kyverno/kyverno/pkg/cel/libs"
 	"github.com/kyverno/kyverno/pkg/cel/matching"
 	dpolcompiler "github.com/kyverno/kyverno/pkg/cel/policies/dpol/compiler"
 	dpolengine "github.com/kyverno/kyverno/pkg/cel/policies/dpol/engine"
 	ivpolengine "github.com/kyverno/kyverno/pkg/cel/policies/ivpol/engine"
+	mpolcompiler "github.com/kyverno/kyverno/pkg/cel/policies/mpol/compiler"
+	mpolengine "github.com/kyverno/kyverno/pkg/cel/policies/mpol/engine"
+	vpolcompiler "github.com/kyverno/kyverno/pkg/cel/policies/vpol/compiler"
+	vpolengine "github.com/kyverno/kyverno/pkg/cel/policies/vpol/engine"
 	"github.com/kyverno/kyverno/pkg/cli/loader"
 	"github.com/kyverno/kyverno/pkg/clients/dclient"
 	"github.com/kyverno/kyverno/pkg/config"
@@ -444,6 +450,19 @@ func runTest(ctx context.Context, out io.Writer, testCase test.TestCase, registr
 		}
 		explicitOperations.Insert(res.Operation)
 	}
+	// Build the context and CEL policy providers once so that every evaluation
+	// below reuses them instead of recompiling the policies per resource.
+	providers := newCELProviders(
+		results,
+		restMapper,
+		dClient,
+		testCase.Fs,
+		contextPath,
+		len(testCase.Test.ClusterResources) > 0,
+		gceMap,
+		&store,
+		polexLoader.CELExceptions,
+	)
 	// evalResource is a closure that applies all loaded policies to a single
 	// resource under the given admission operation. The defaultRun flag controls
 	// whether DeletingPolicies are evaluated (they run only once, in the default
@@ -484,6 +503,13 @@ func runTest(ctx context.Context, out io.Writer, testCase test.TestCase, registr
 			ConfigMapResolver:                 cmResolver,
 			RESTMapper:                        restMapper,
 			CrdPaths:                          crdPaths,
+			ContextProvider:                   providers.context,
+			VpolProvider:                      providers.vpol,
+			VpolProviderErr:                   providers.vpolErr,
+			VpolJSONProvider:                  providers.vpolJSON,
+			VpolJSONProviderErr:               providers.vpolJSONErr,
+			MpolProvider:                      providers.mpol,
+			MpolProviderErr:                   providers.mpolErr,
 		}
 		ers, err := pp.ApplyPoliciesOnResource()
 		if err != nil {
@@ -599,6 +625,13 @@ func runTest(ctx context.Context, out io.Writer, testCase test.TestCase, registr
 			Out:                               io.Discard,
 			CrdPaths:                          crdPaths,
 			RESTMapper:                        restMapper,
+			ContextProvider:                   providers.context,
+			VpolProvider:                      providers.vpol,
+			VpolProviderErr:                   providers.vpolErr,
+			VpolJSONProvider:                  providers.vpolJSON,
+			VpolJSONProviderErr:               providers.vpolJSONErr,
+			MpolProvider:                      providers.mpol,
+			MpolProviderErr:                   providers.mpolErr,
 		}
 		ers, err := processor.ApplyPoliciesOnResource()
 		if err != nil {
@@ -1072,4 +1105,75 @@ func wrapHTTPResponse(body interface{}, statusCode int) interface{} {
 		"body":       body,
 		"statusCode": statusCode,
 	}
+}
+
+// celProviders holds the context and CEL policy providers shared by every
+// evaluation of a test case. Construction errors are kept so that they surface
+// from the policy processor exactly as they would if it built the providers itself.
+type celProviders struct {
+	context     libs.Context
+	vpol        vpolengine.Provider
+	vpolErr     error
+	vpolJSON    vpolengine.Provider
+	vpolJSONErr error
+	mpol        mpolengine.Provider
+	mpolErr     error
+}
+
+func newCELProviders(
+	results *policy.LoaderResults,
+	restMapper meta.RESTMapper,
+	dClient dclient.Interface,
+	fs billy.Filesystem,
+	contextPath string,
+	cluster bool,
+	gceMap map[string]interface{},
+	st *store.Store,
+	celExceptions []*policiesv1beta1.PolicyException,
+) celProviders {
+	var p celProviders
+	if len(results.ValidatingPolicies) == 0 && len(results.MutatingPolicies) == 0 {
+		return p
+	}
+	// On failure the processor falls back to building the providers itself,
+	// which reports the same error.
+	if restMapper == nil {
+		var err error
+		if restMapper, err = utils.GetRESTMapper(dClient); err != nil {
+			return p
+		}
+	}
+	contextProvider, err := processor.NewContextProvider(dClient, restMapper, fs, contextPath, true, !cluster, gceMap, st.GetHTTPMockIndex())
+	if err != nil {
+		return p
+	}
+	p.context = contextProvider
+	if len(results.ValidatingPolicies) != 0 {
+		compiler := vpolcompiler.NewCompilerWithTrace(false)
+		var jsonPolicies, k8sPolicies []policiesv1beta1.ValidatingPolicyLike
+		for _, pol := range results.ValidatingPolicies {
+			if pol.GetValidatingPolicySpec().EvaluationMode() == policieskyvernoio.EvaluationModeJSON {
+				jsonPolicies = append(jsonPolicies, pol)
+			} else {
+				k8sPolicies = append(k8sPolicies, pol)
+			}
+		}
+		if len(k8sPolicies) > 0 {
+			if p.vpol, p.vpolErr = vpolengine.NewProvider(compiler, k8sPolicies, celExceptions); p.vpolErr != nil {
+				p.vpol = nil
+			}
+		}
+		if len(jsonPolicies) > 0 {
+			if p.vpolJSON, p.vpolJSONErr = vpolengine.NewProvider(compiler, jsonPolicies, celExceptions); p.vpolJSONErr != nil {
+				p.vpolJSON = nil
+			}
+		}
+	}
+	if len(results.MutatingPolicies) != 0 {
+		compiler := mpolcompiler.NewCompilerWithTrace(false)
+		if p.mpol, p.mpolErr = mpolengine.NewProvider(compiler, results.MutatingPolicies, celExceptions, contextProvider); p.mpolErr != nil {
+			p.mpol = nil
+		}
+	}
+	return p
 }
