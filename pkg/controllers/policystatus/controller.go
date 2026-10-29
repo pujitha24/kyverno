@@ -323,8 +323,8 @@ func (c controller) reconcileConditions(ctx context.Context, policy engineapi.Ge
 	status := &policiesv1beta1.ConditionStatus{}
 	backgroundOnly := false
 	// backgroundEnabled gates the reports-controller RBAC permission check below.
-	// GeneratingPolicies have no background toggle (they are inherently background),
-	// so they keep the default of true and are always checked.
+	// GeneratingPolicies are never scanned by the reports controller (they produce
+	// no policy reports), so they opt out of the check below.
 	backgroundEnabled := true
 	switch policy.GetKind() {
 	case webhook.MutatingPolicyType:
@@ -350,6 +350,7 @@ func (c controller) reconcileConditions(ctx context.Context, policy engineapi.Ge
 	case webhook.GeneratingPolicyType:
 		key = webhook.BuildRecorderKey(webhook.GeneratingPolicyType, policy.GetName(), "")
 		matchConstraints = policy.AsGeneratingPolicy().GetMatchConstraints()
+		backgroundEnabled = false
 		// GeneratingPolicy uses v1alpha1.ConditionStatus, convert to v1beta1
 		v1alpha1Status := policy.AsGeneratingPolicy().GetStatus().ConditionStatus
 		status = &policiesv1beta1.ConditionStatus{
@@ -360,6 +361,7 @@ func (c controller) reconcileConditions(ctx context.Context, policy engineapi.Ge
 	case webhook.NamespacedGeneratingPolicyType:
 		key = webhook.BuildRecorderKey(webhook.NamespacedGeneratingPolicyType, policy.GetName(), policy.GetNamespace())
 		matchConstraints = policy.AsNamespacedGeneratingPolicy().GetMatchConstraints()
+		backgroundEnabled = false
 		// NamespacedGeneratingPolicy uses v1alpha1.ConditionStatus, convert to v1beta1
 		v1alpha1Status := policy.AsNamespacedGeneratingPolicy().GetStatus().ConditionStatus
 		status = &policiesv1beta1.ConditionStatus{

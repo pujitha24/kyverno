@@ -451,6 +451,78 @@ func TestReconcileBeta1Conditions_RBACGatedOnBackground(t *testing.T) {
 	}
 }
 
+// TestReconcileConditions_GeneratingPolicySkipsRBACCheck verifies that
+// GeneratingPolicies are not marked not-ready for lacking reports-controller
+// permissions on their trigger kind: the reports controller never scans them,
+// so the RBACPermissionsGranted check must be skipped even when every access
+// review is denied.
+func TestReconcileConditions_GeneratingPolicySkipsRBACCheck(t *testing.T) {
+	t.Parallel()
+
+	secretsRule := []admissionregistrationv1.NamedRuleWithOperations{
+		{
+			RuleWithOperations: admissionregistrationv1.RuleWithOperations{
+				Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create},
+				Rule: admissionregistrationv1.Rule{
+					APIGroups:   []string{""},
+					APIVersions: []string{"v1"},
+					Resources:   []string{"secrets"},
+				},
+			},
+		},
+	}
+	mc := admissionregistrationv1.MatchResources{ResourceRules: secretsRule}
+
+	tests := []struct {
+		name   string
+		policy engineapi.GenericPolicy
+	}{
+		{
+			name: "GeneratingPolicy",
+			policy: engineapi.NewGeneratingPolicy(&policiesv1beta1.GeneratingPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-gpol"},
+				Spec:       policiesv1beta1.GeneratingPolicySpec{MatchConstraints: &mc},
+			}),
+		},
+		{
+			name: "NamespacedGeneratingPolicy",
+			policy: engineapi.NewNamespacedGeneratingPolicy(&policiesv1beta1.NamespacedGeneratingPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-ngpol", Namespace: "test-ns"},
+				Spec:       policiesv1beta1.GeneratingPolicySpec{MatchConstraints: &mc},
+			}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dc := dclient.NewEmptyFakeClient()
+			// Deny every SubjectAccessReview so the RBAC check fails whenever it runs.
+			kube := dc.GetKubeClient().(*kubefake.Clientset)
+			kube.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				return true, &authorizationv1.SubjectAccessReview{
+					Status: authorizationv1.SubjectAccessReviewStatus{Allowed: false, Reason: "denied by test"},
+				}, nil
+			})
+
+			c := controller{
+				dclient:          dc,
+				client:           versionedfake.NewSimpleClientset(),
+				authChecker:      auth.NewSubjectChecker(dc.GetKubeClient().AuthorizationV1().SubjectAccessReviews(), "system:serviceaccount:kyverno:reports-controller", nil),
+				polStateRecorder: webhook.NewStateRecorder(nil),
+			}
+
+			status := c.reconcileConditions(context.Background(), tt.policy)
+
+			cond := findCondition(status.Conditions, policiesv1beta1.PolicyConditionTypeRBACPermissionsGranted)
+			require.NotNil(t, cond, "RBACPermissionsGranted condition should always be set")
+			assert.Equal(t, metav1.ConditionTrue, cond.Status)
+			assert.Contains(t, cond.Message, "Background scanning disabled")
+		})
+	}
+}
+
 // TestReconcileBeta1Conditions_RBACChecksAutogenTargets verifies that the
 // RBACPermissionsGranted condition also covers autogen'd custom-CRD extraction
 // targets (Status.Autogen.Configs), not just the policy's own matchConstraints.
