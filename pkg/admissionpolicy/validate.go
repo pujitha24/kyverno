@@ -275,6 +275,11 @@ func processVAPWithClient(policy *admissionregistrationv1.ValidatingAdmissionPol
 				return er, err
 			}
 
+			// a selector matching no params with parameterNotFoundAction=Allow yields an empty slice and no error
+			if len(params) == 0 {
+				continue
+			}
+
 			// a selector being present in the binding is the only case in which params will contain more than 1 entry
 			var matchedParams runtime.Object
 			if len(params) > 1 {
