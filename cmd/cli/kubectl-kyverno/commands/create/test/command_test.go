@@ -3,9 +3,11 @@ package test
 import (
 	"bytes"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	clitest "github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -63,4 +65,48 @@ func TestCommandHelp(t *testing.T) {
 	out, err := io.ReadAll(b)
 	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(string(out), cmd.Long))
+}
+
+func TestCommandOutput(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		args      []string
+		resources []string
+		patched   string
+	}{{
+		name:      "namespaced",
+		args:      []string{"--pass", "pol,rule,res,ns,Pod"},
+		resources: []string{"ns/res"},
+	}, {
+		name:      "cluster scoped",
+		args:      []string{"--fail", "pol,rule,res,,Namespace"},
+		resources: []string{"res"},
+	}, {
+		name:      "patched",
+		args:      []string{"--pass", "pol,rule,res,ns,Pod,patched.yaml"},
+		resources: []string{"ns/res"},
+		patched:   "patched.yaml",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "kyverno-test.yaml")
+			cmd := Command()
+			cmd.SetArgs(append([]string{"-p", "policy.yaml", "-r", "resource.yaml", "-o", path}, tt.args...))
+			assert.NoError(t, cmd.Execute())
+			cases := clitest.LoadTest(nil, path)
+			if !assert.Len(t, cases, 1) || !assert.NoError(t, cases[0].Err) {
+				return
+			}
+			got := cases[0].Test
+			assert.Equal(t, "cli.kyverno.io/v1alpha1", got.APIVersion)
+			assert.Equal(t, "Test", got.Kind)
+			assert.Equal(t, "test-name", got.ObjectMeta.Name)
+			if assert.Len(t, got.Results, 1) {
+				assert.Equal(t, tt.resources, got.Results[0].Resources)
+				assert.Equal(t, tt.patched, got.Results[0].PatchedResources)
+			}
+		})
+	}
 }
