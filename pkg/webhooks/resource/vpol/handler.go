@@ -107,13 +107,9 @@ func logDecisionTraces(logger logr.Logger, response vpolengine.EngineResponse) {
 }
 
 func (h *handler) audit(ctx context.Context, logger logr.Logger, admissionRequest handlers.AdmissionRequest, request vpolengine.EngineRequest, response vpolengine.EngineResponse) {
-	blocked := false
-	for _, p := range response.Policies {
-		if p.Actions.Has(admissionregistrationv1.Deny) {
-			blocked = true
-			break
-		}
-	}
+	// a request is blocked only when the admission response rejects it, not merely because a
+	// policy has the Deny action
+	blocked := !h.admissionResponse(ctx, request, response).Allowed
 
 	allEngineResponses := make([]engineapi.EngineResponse, 0, len(response.Policies))
 	reportableEngineResponses := make([]engineapi.EngineResponse, 0, len(response.Policies))

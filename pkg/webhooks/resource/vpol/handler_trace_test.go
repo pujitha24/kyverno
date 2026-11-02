@@ -16,6 +16,7 @@ import (
 	vpolengine "github.com/kyverno/kyverno/pkg/cel/policies/vpol/engine"
 	fakekyvernoclient "github.com/kyverno/kyverno/pkg/client/clientset/versioned/fake"
 	"github.com/kyverno/kyverno/pkg/event"
+	reportutils "github.com/kyverno/kyverno/pkg/utils/report"
 	"github.com/kyverno/kyverno/pkg/webhooks/handlers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,8 @@ func (c *capturedLog) decisions() []map[string]any {
 // trace is what --enableDecisionTraces sets: whether the policy is compiled for tracing.
 func teamLabelHandler(t *testing.T, trace bool) *handler {
 	t.Helper()
+	// the audit path consults the reporting configuration, which the admission controller always sets
+	reportutils.NewReportingConfig([]string{"pass", "fail"}, "validate")
 	policy := &policiesv1beta1.ValidatingPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "require-platform-team"},
 		Spec: policiesv1beta1.ValidatingPolicySpec{
