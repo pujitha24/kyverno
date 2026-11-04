@@ -1,6 +1,7 @@
 package fix
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,6 +78,61 @@ func TestFixTest_GlobalContextEntries_hasData(t *testing.T) {
 			}
 			if !tc.wantWarning && warnFound {
 				t.Errorf("unexpected 'has no data source' warning; messages: %v", messages)
+			}
+		})
+	}
+}
+
+func TestFixTest_SortsResourceLists(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		results []v1alpha1.TestResult
+	}{
+		{
+			name: "single result",
+			results: []v1alpha1.TestResult{{
+				TestResultBase: v1alpha1.TestResultBase{Policy: "p", Rule: "r"},
+				TestResultData: v1alpha1.TestResultData{
+					Resources:          []string{"b", "a"},
+					GeneratedResources: []string{"b-gen", "a-gen"},
+				},
+			}},
+		},
+		{
+			name: "results with different policies",
+			results: []v1alpha1.TestResult{
+				{
+					TestResultBase: v1alpha1.TestResultBase{Policy: "p2", Rule: "r"},
+					TestResultData: v1alpha1.TestResultData{
+						Resources:          []string{"b", "a"},
+						GeneratedResources: []string{"b-gen", "a-gen"},
+					},
+				},
+				{
+					TestResultBase: v1alpha1.TestResultBase{Policy: "p1", Rule: "r"},
+					TestResultData: v1alpha1.TestResultData{
+						Resources:          []string{"d", "c"},
+						GeneratedResources: []string{"d-gen", "c-gen"},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, _, err := FixTest(v1alpha1.Test{Results: tt.results}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range got.Results {
+				if !slices.IsSorted(r.Resources) {
+					t.Errorf("resources not sorted: %v", r.Resources)
+				}
+				if !slices.IsSorted(r.GeneratedResources) {
+					t.Errorf("generatedResources not sorted: %v", r.GeneratedResources)
+				}
 			}
 		})
 	}
