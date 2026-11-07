@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"strconv"
+	"strings"
 
 	jsonpatchv5 "github.com/evanphx/json-patch/v5"
 	"github.com/google/cel-go/cel"
@@ -128,7 +129,7 @@ func (e *jsonPatcher) PatchJSON(ctx context.Context, evalData map[string]any, ru
 	if !ok {
 		return nil, MutationEval{}, fmt.Errorf("JSON Patch requires an object root")
 	}
-	objJS, err := gojson.Marshal(object)
+	objJS, err := gojson.Marshal(markFloats(object))
 	if err != nil {
 		return nil, MutationEval{}, fmt.Errorf("failed to encode JSON object: %w", err)
 	}
@@ -306,7 +307,7 @@ func patchValueToJSON(val ref.Val) (gojson.RawMessage, error) {
 		}
 		return marshalPatchValue(uint64(typed))
 	case types.Double:
-		return marshalPatchValue(float64(typed))
+		return marshalPatchValue(markFloats(float64(typed)))
 	case *dynamic.ObjectVal:
 		// TODO: Object initializers are insufficiently type checked.
 		// In the interim, we use this sanity check to detect type mismatches
@@ -356,6 +357,36 @@ func patchValueToJSON(val ref.Val) (gojson.RawMessage, error) {
 			return nil, unmarshalableValue(err)
 		}
 		return marshalPatchValue(v)
+	}
+}
+
+// markFloats returns v with every integral float64 replaced by a json.Number that keeps a
+// fractional part, because encoding/json writes float64(2) as 2 and the decode of the patched
+// document would then read it back as an int64. Maps and slices are copied, not modified.
+func markFloats(v any) any {
+	switch typed := v.(type) {
+	case float64:
+		if typed != math.Trunc(typed) || math.IsInf(typed, 0) {
+			return typed
+		}
+		if b, err := gojson.Marshal(typed); err == nil && !strings.ContainsAny(string(b), ".eE") {
+			return gojson.Number(string(b) + ".0")
+		}
+		return typed
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, e := range typed {
+			out[k] = markFloats(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, e := range typed {
+			out[i] = markFloats(e)
+		}
+		return out
+	default:
+		return v
 	}
 }
 

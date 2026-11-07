@@ -244,3 +244,24 @@ func TestJSONPatcherReusesDefaultSerializer(t *testing.T) {
 	require.NotNil(t, patcher.jsonSerializer)
 	assert.Same(t, defaultJSONSerializer, patcher.jsonSerializer)
 }
+
+func TestPatchJSONPreservesFloats(t *testing.T) {
+	t.Run("untouched values", func(t *testing.T) {
+		patcher := compileJSONPatcher(t, `[JSONPatch{op: "add", path: "/region", value: "west"}]`)
+		object := map[string]any{"ratio": float64(2), "list": []any{float64(1), 0.5, int64(3)}, "n": map[string]any{"f": float64(4)}}
+		got, _, err := patcher.PatchJSON(context.Background(), map[string]any{"object": object}, 10000000)
+		require.NoError(t, err)
+		assert.Equal(t, float64(2), got.Object["ratio"])
+		assert.Equal(t, []any{float64(1), 0.5, int64(3)}, got.Object["list"])
+		assert.Equal(t, map[string]any{"f": float64(4)}, got.Object["n"])
+		assert.Equal(t, "west", got.Object["region"])
+	})
+
+	t.Run("patch value", func(t *testing.T) {
+		patcher := compileJSONPatcher(t, `[JSONPatch{op: "add", path: "/a", value: 1.0}, JSONPatch{op: "add", path: "/b", value: 1}]`)
+		got, _, err := patcher.PatchJSON(context.Background(), map[string]any{"object": map[string]any{}}, 10000000)
+		require.NoError(t, err)
+		assert.Equal(t, float64(1), got.Object["a"])
+		assert.Equal(t, int64(1), got.Object["b"])
+	})
+}
